@@ -208,7 +208,8 @@ Loop:
 			log.Debug().Msg("Puppeteer stdout closed")
 			break
 		} else if err != nil {
-			log.Err(err).Msg("Failed to decode Puppeteer payload")
+			buf, _ := io.ReadAll(stdoutJSON.Buffered())
+			log.Err(err).Msgf("Failed to decode Puppeteer payload: %+v", string(buf))
 			kill()
 			break
 		}
