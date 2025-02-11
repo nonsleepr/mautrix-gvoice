@@ -43,22 +43,22 @@ func (gc *GVClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 			ID: libgv.GenerateTransactionID(),
 		},
 	}
-	var electronStatus string
+	var puppeteerStatus string
 	if rs := gc.requestSignature.Load(); rs != nil {
 		recipients := msg.Portal.Metadata.(*PortalMetadata).Participants
 		td, err := (*rs)(ctx, req.ThreadID, recipients, req.TransactionID.ID)
 		if err != nil {
 			zerolog.Ctx(ctx).Err(err).Msg("Failed to generate signature")
-			electronStatus = "failed"
+			puppeteerStatus = "failed"
 		} else if td != "" {
 			req.TrackingData = &gvproto.ReqSendSMS_TrackingData{Data: td}
-			electronStatus = "ok"
+			puppeteerStatus = "ok"
 		} else {
-			electronStatus = "failed/empty"
+			puppeteerStatus = "failed/empty"
 		}
 	} else {
-		zerolog.Ctx(ctx).Debug().Msg("Electron not running, sending message without signature data")
-		electronStatus = "unavailable"
+		zerolog.Ctx(ctx).Debug().Msg("Puppeteer not running, sending message without signature data")
+		puppeteerStatus = "unavailable"
 	}
 	switch msg.Content.MsgType {
 	case event.MsgText, event.MsgNotice:
@@ -110,7 +110,7 @@ func (gc *GVClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 				status = respErr.Resp.StatusCode
 			}
 			if status == 429 {
-				err = fmt.Errorf("%w (electron status: %s)", err, electronStatus)
+				err = fmt.Errorf("%w (puppeteer status: %s)", err, puppeteerStatus)
 			}
 			err = bridgev2.WrapErrorInStatus(err).
 				WithIsCertain(status >= 400 && status < 500).
