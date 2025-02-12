@@ -20,15 +20,44 @@ let allowedScriptSource = "";
 let inited = false;
 let browser, page;
 
+class AsyncLock {
+    constructor () {
+        this.locked = false;
+        this.pending = [];
+    }
+    
+    async acquire() {
+        //console.error("Acquiring lock...");
+        if (!this.locked) {
+            this.locked = true;
+            //console.error("Lock acquired");
+            return;
+        }
+        await new Promise(resolve => this.pending.push(resolve));
+    }
+    
+    release() {
+        //console.error("Lock released");
+        if (this.pending.length > 0) {
+            const resolve = this.pending.shift();
+            resolve();
+        } else {
+            this.locked = false;
+        }
+    }
+}
+
+const browserLock = new AsyncLock()
+
 const DEBUG_MODE = process.env.MAUTRIX_GVOICE_PUPPETEER_DEBUG === "true";
 
 const loadScript = async ({ script_source, checksum }) => {
-    console.log("Loading script from", script_source);
+    console.error("Loading script from", script_source);
     // Bypass CSP
     await page.setBypassCSP(true);
     // Load the script by injecting it into the page
     await page.addScriptTag({ url: script_source });
-    console.log("Script loaded");
+    console.error("Script loaded");
 };
 
 const executeScript = async ({ payload, program, global_name }) => {
@@ -37,7 +66,7 @@ const executeScript = async ({ payload, program, global_name }) => {
         destinations: payload.destinations,
         thread_id: payload.thread_id
     };
-    console.log("Executing", global_name, "with", reorderedPayload);
+    console.error("Executing", global_name, "with", reorderedPayload);
     const response = await page.evaluate(({ global_name, program, reorderedPayload }) => {
         return new Promise((resolve, reject) => {
             new Promise(resolve => {
@@ -57,51 +86,56 @@ const executeScript = async ({ payload, program, global_name }) => {
 };
 
 const processIPC = async data => {
-    if (!inited) {
-        if (!data.script_source || !data.checksum) {
-            throw new Error("invalid init data");
-        }
-        inited = true;
-        if (data.script_source.startsWith("//")) {
-            data.script_source = "https:" + data.script_source;
-        }
-        allowedScriptSource = data.script_source;
-
-        // Launch Puppeteer browser and page
-        browser = await puppeteer.launch({
-            headless: !DEBUG_MODE,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-        page = await browser.newPage();
-
-        // Set user agent if needed
-        const userAgent = (await browser.userAgent()).replace(/HeadlessChrome\/[^ ]+ /, "");
-        await page.setUserAgent(userAgent);
-
-        // Intercept requests to block unwanted URLs
-        await page.setRequestInterception(true);
-        page.on('request', request => {
-            const url = request.url();
-            if (url === allowedScriptSource || url.startsWith("https://voice.google.com/") || url.startsWith("devtools://")) {
-                request.continue();
-            } else {
-                request.abort();
+    await browserLock.acquire();
+    try {
+        if (!inited) {
+            if (!data.script_source || !data.checksum) {
+                throw new Error("invalid init data");
             }
-        });
+            inited = true;
+            if (data.script_source.startsWith("//")) {
+                data.script_source = "https:" + data.script_source;
+            }
+            allowedScriptSource = data.script_source;
 
-        // Bypass CSP
-        await page.setBypassCSP(true);
+            // Launch Puppeteer browser and page
+            browser = await puppeteer.launch({
+                headless: !DEBUG_MODE,
+                args: ['--no-sandbox', '--disable-setuid-sandbox']
+            });
+            page = await browser.newPage();
 
-        await page.goto("https://voice.google.com/about", {
-            waitUntil: 'networkidle2'
-        });
-        await loadScript({ script_source: data.script_source, checksum: data.checksum });
-        console.log(JSON.stringify({ status: "waiting_for_init" }));
-    } else if (!data.global_name || !data.program || !data.payload) {
-        throw new Error("invalid request data");
-    } else {
-        const response = await executeScript(data);
-        return { status: "result", response };
+            // Set user agent if needed
+            const userAgent = (await browser.userAgent()).replace(/HeadlessChrome\/[^ ]+ /, "");
+            await page.setUserAgent(userAgent);
+
+            // Intercept requests to block unwanted URLs
+            await page.setRequestInterception(true);
+            page.on('request', request => {
+                const url = request.url();
+                if (url === allowedScriptSource || url.startsWith("https://voice.google.com/") || url.startsWith("devtools://")) {
+                    request.continue();
+                } else {
+                    request.abort();
+                }
+            });
+
+            // Bypass CSP
+            await page.setBypassCSP(true);
+
+            await page.goto("https://voice.google.com/about", {
+                waitUntil: 'networkidle2'
+            });
+            await loadScript({ script_source: data.script_source, checksum: data.checksum });
+            console.log(JSON.stringify({ status: "waiting_for_init" }));
+        } else if (!data.global_name || !data.program || !data.payload) {
+            throw new Error("invalid request data");
+        } else {
+            const response = await executeScript(data);
+            return { status: "result", response };
+        }
+    } finally {
+        browserLock.release();
     }
 };
 
