@@ -1,0 +1,96 @@
+# Multi-stage build for mautrix-gvoice with Ubuntu base
+FROM golang:1.23-bookworm AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    ca-certificates \
+    build-essential \
+    libolm-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy source code (scripts/ excluded by .dockerignore)
+COPY . /build
+WORKDIR /build
+
+# Build the binary
+RUN ./build.sh
+
+# Final stage - Ubuntu 24.04 LTS
+FROM ubuntu:24.04
+
+# Install runtime dependencies (this layer will be cached)
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    ca-certificates \
+    bash \
+    jq \
+    curl \
+    wget \
+    sudo \
+    gosu \
+    nodejs \
+    npm \
+    xvfb \
+    x11vnc \
+    fluxbox \
+    dbus-x11 \
+    libgtk-3-0 \
+    libx11-6 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxrandr2 \
+    libxss1 \
+    libxtst6 \
+    libdrm2 \
+    libxkbcommon0 \
+    libatspi2.0-0 \
+    libgtk-3-0 \
+    libgdk-pixbuf2.0-0 \
+    libnss3 \
+    libxss1 \
+    libasound2t64 \
+    libgbm1 \
+    fonts-liberation \
+    # Additional dependencies for mautrix-gvoice
+    libolm3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Electron globally (this layer will be cached)
+RUN npm install -g electron@latest
+
+# Create non-root user (this layer will be cached)
+RUN groupadd -g 1337 mautrix && \
+    useradd -u 1337 -g 1337 -m -s /bin/bash mautrix && \
+    echo "mautrix ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+# Copy built binary and original docker-run.sh (rarely changes)
+COPY --from=builder /build/mautrix-gvoice /usr/bin/mautrix-gvoice
+COPY --from=builder /build/docker-run.sh /docker-run.sh
+
+# Fix the docker-run.sh script for Ubuntu compatibility
+RUN sed -i '1s|#!/bin/sh|#!/bin/bash|' /docker-run.sh && \
+    sed -i 's/su-exec/gosu/g' /docker-run.sh && \
+    sed -i 's/hostname: 127.0.0.1/hostname: 0.0.0.0/g' /docker-run.sh && \
+    sed -i '30s/^fixperms$/# fixperms # disabled - handled by wrapper/' /docker-run.sh && \
+    sed -i 's/\$UID:\$GID/\${PUID:-1000}:\${PGID:-1000}/g' /docker-run.sh && \
+    sed -i 's/\$UID:\$GID/\${PUID:-1000}:\${PGID:-1000}/g' /docker-run.sh && \
+    chmod +x /docker-run.sh
+
+# Set base permissions (this layer will be cached)
+RUN chown -R mautrix:mautrix /home/mautrix
+
+# Copy shell scripts last (frequently changed files)
+# This way, changes to these scripts only invalidate the final layers
+COPY scripts/docker-run-wrapper.sh /docker-run-wrapper.sh
+COPY scripts/start-with-display.sh /start-with-display.sh
+COPY scripts/test-electron.sh /test-electron.sh
+
+# Make scripts executable in final layer
+RUN chmod +x /docker-run-wrapper.sh /start-with-display.sh /test-electron.sh
+
+VOLUME /data
+
+CMD ["/start-with-display.sh", "/docker-run-wrapper.sh"]

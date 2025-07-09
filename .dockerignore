@@ -1,0 +1,29 @@
+# Exclude development and build artifacts
+data/
+logs/
+*.db
+*.log
+.git/
+.gitignore
+.editorconfig
+.pre-commit-config.yaml
+.gitlab-ci.yml
+
+# Exclude documentation
+README.md
+CHANGELOG.md
+ROADMAP.md
+SIGNATURE.md
+LICENSE*
+
+# Exclude config files that aren't needed for build
+*.yaml
+*.json
+devenv.yaml
+gvoice-config.yaml
+config.yaml
+package*.json
+
+# Exclude other Dockerfiles
+Dockerfile*
+!Dockerfile.ubuntu
